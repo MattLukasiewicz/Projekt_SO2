@@ -30,7 +30,7 @@
 #define LOG_HISTORY_SIZE 22
 
 // Klucze IPC
-#define SHM_KEY 77793  // Zmieniony klucz dla pewności odświeżenia
+#define SHM_KEY 77793
 #define SEM_KEY 88903
 
 #define SEM_PAS 0
@@ -371,18 +371,13 @@ void draw_interface(int loop_counter, int plane_id_counter, bool paused) {
     // =========================================================
     // === RYSUNEK WIEŻY I SAMOLOTU (POD TERMINALEM) ===========
     // =========================================================
-    // (Teraz term_y jest już zdefiniowane, więc nie będzie błędu)
-
-    // =========================================================
-    // === RYSUNEK WIEŻY I SAMOLOTU (POD TERMINALEM) ===========
-    // =========================================================
 
     // art_y ustawiamy pod terminalem (term_y to linia nagłówka terminala)
     int art_y = term_y + 5;
     int art_x = 5;
 
     // --- WIEŻA KONTROLNA ---
-    attron(A_BOLD | COLOR_PAIR(3)); // Cyjan
+    attron(A_BOLD | COLOR_PAIR(3));
     mvprintw(art_y,     art_x, "      |~|      ");
     attron(A_BLINK); mvaddch(art_y, art_x + 6, '*'); attroff(A_BLINK); // Mrugające światło
     mvprintw(art_y + 1, art_x, "     [|_|]     ");
@@ -501,10 +496,11 @@ int main() {
     std::cout << "============================================" << std::endl;
     std::cout << "    WYBIERZ SCENARIUSZ SYMULACJI LOTNISKA     " << std::endl;
     std::cout << "============================================" << std::endl;
-    std::cout << "1. ZRÓWNOWAŻONY (Normalny ruch, wszystko dziala)" << std::endl;
-    std::cout << "2. PARALIZ PASAZERSKI (Wakacje, tlumy ludzi)" << std::endl;
-    std::cout << "3. AWARIA PASA (Tylko 1 pas dziala, zator)" << std::endl;
-    std::cout << "Wybierz (1-3): ";
+    std::cout << "1. Poza sezonem (optymalnie)" << std::endl;
+    std::cout << "2. Wakacje, tlumy ludzi" << std::endl;
+    std::cout << "3. Aremagedon" << std::endl;
+    std::cout << "4. AWARIA PASA " << std::endl;
+    std::cout << "Wybierz (1-4): ";
 
     int wybor;
     std::cin >> wybor;
@@ -516,11 +512,10 @@ int main() {
 
     if (wybor == 1) {
         // Scenariusz 1: Ideał - Zrównoważony
-        strcpy(shared_memory->scenariusz_nazwa, "SCENARIUSZ A: OPTYMALNY (BALANS)");
+        strcpy(shared_memory->scenariusz_nazwa, "SCENARIUSZ A: Poza sezonem(BALANS)");
         shared_memory->cfg_runways = 2;
         shared_memory->cfg_gates = 6;
 
-        // ZMIANY:
         shared_memory->cfg_spawn_rate = 35;
         shared_memory->cfg_pax_rate = 20;       // 20% - Szansa na pasażera (optymalna przy rzadszych lotach)
         shared_memory->cfg_boarding_time = 4;   // 5s - Czas na podziwianie postoju
@@ -529,24 +524,46 @@ int main() {
         shared_memory->cfg_landing_time = 2000000; // 2.0s - Szybsze lądowanie, żeby zwolnić pas
     }
     else if (wybor == 2) {
-        strcpy(shared_memory->scenariusz_nazwa, "SCENARIUSZ B: TLUM");
+        // Scenariusz 2: TŁUM / WAKACJE
+        // Cel: Pasażerów przybywa szybciej niż samoloty mogą ich zabrać.
+        // Efekt: Czerwone liczniki w terminalu, każdy samolot "PELNY".
+        strcpy(shared_memory->scenariusz_nazwa, "SCENARIUSZ B: Wakacje");
+
+        shared_memory->cfg_runways = 3;
+        shared_memory->cfg_gates = 6;
+
+        // ZMIANY:
+        shared_memory->cfg_spawn_rate = 20;
+        shared_memory->cfg_pax_rate = 50;
+        shared_memory->cfg_boarding_time = 4;
+
+        shared_memory->cfg_plane_capacity = 30;
+        shared_memory->cfg_landing_time = 2500000;
+    }
+    else  if(wybor == 3){
+        // --- OPCJA 3: NIEWYDOLNOŚĆ LOTNISKA ---
+
+        strcpy(shared_memory->scenariusz_nazwa, "SCENARIUSZ C: ARMAGEDON");
+
         shared_memory->cfg_runways = 2;
         shared_memory->cfg_gates = 6;
-        shared_memory->cfg_spawn_rate = 40;
+
+        // Parametry: Ruch normalny, ale infrastruktura za słaba -> KOREK
+        shared_memory->cfg_spawn_rate = 30;     // 3.0s - Samoloty przylatują szybciej niż 1 pas obsłuży
         shared_memory->cfg_pax_rate = 80;
-        shared_memory->cfg_boarding_time = 6;
-        shared_memory->cfg_plane_capacity = 20;
-        shared_memory->cfg_landing_time = 2000000;
+        shared_memory->cfg_boarding_time = 6;   // 6s - Bardzo wolna obsługa naziemna (chaos)
+        shared_memory->cfg_plane_capacity = 30;
+        shared_memory->cfg_landing_time = 3500000; // 3.0s - Wolne lądowanie (dodaje opóźnienia)
     }
     else {
-        strcpy(shared_memory->scenariusz_nazwa, "SCENARIUSZ C: AWARIA PASA");
+        strcpy(shared_memory->scenariusz_nazwa, "SCENARIUSZ D: AWARIA PASA");
         shared_memory->cfg_runways = 1;
-        shared_memory->cfg_gates = 8;
-        shared_memory->cfg_spawn_rate = 15;
-        shared_memory->cfg_pax_rate = 10;
-        shared_memory->cfg_boarding_time = 1;
+        shared_memory->cfg_gates = 4;
+        shared_memory->cfg_spawn_rate = 20;
+        shared_memory->cfg_pax_rate = 40;
+        shared_memory->cfg_boarding_time = 2;
         shared_memory->cfg_plane_capacity = 30;
-        shared_memory->cfg_landing_time = 4000000;
+        shared_memory->cfg_landing_time = 3000000;
     }
 
     // 4. INICJALIZACJA SEMAFORÓW
