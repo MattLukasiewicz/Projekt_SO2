@@ -136,37 +136,10 @@ void proces_samolotu(int id) {
     shared_memory->aktywne_samoloty++;
     sem_v(MUTEX_ZASOBY);
 
-    // --- INTELIGENTNA DECYZJA ---
     sem_p(MUTEX_ZASOBY);
-
-    int max_pax = -1;
-    int max_kierunek = -1;
-
-    for(int i=0; i<4; i++) {
-        if (shared_memory->pasazerowie_w_terminalu[i] > max_pax) {
-            max_pax = shared_memory->pasazerowie_w_terminalu[i];
-            max_kierunek = i;
-        }
-    }
-
-    int konkurencja = 0;
-    for(int i=0; i < shared_memory->cfg_gates; i++) {
-        if (shared_memory->stanowiska_gate[i] > 0 && shared_memory->gate_kierunek[i] == max_kierunek) {
-            konkurencja++;
-        }
-    }
-
-    int moj_kierunek;
-    int próg_tloku = 15;
-
-    if (max_pax > próg_tloku && konkurencja < 2) {
-        if (rand() % 100 < 75) moj_kierunek = max_kierunek;
-        else moj_kierunek = rand() % 4;
-    } else {
-        moj_kierunek = rand() % 4;
-    }
-
+    int moj_kierunek = rand() % 4;
     sem_v(MUTEX_ZASOBY);
+    // ---------------------
 
     // 1. LĄDOWANIE
     sem_p(SEM_PAS);
@@ -383,7 +356,13 @@ void draw_interface(int loop_counter, int plane_id_counter, bool paused) {
     for(int i=0; i<4; i++) {
         mvprintw(term_y + 1, x_pos, "BRAMA %c: ", KIERUNKI_NAZWY[i]);
         int count = shared_memory->pasazerowie_w_terminalu[i];
-        if (count > 15) attron(COLOR_PAIR(2) | A_BOLD); else attron(COLOR_PAIR(1));
+
+
+        if (count >= shared_memory->cfg_plane_capacity)
+            attron(COLOR_PAIR(2) | A_BOLD); // Czerwony
+        else
+            attron(COLOR_PAIR(1)); // Zielony
+
         printw("%-3d os.", count);
         attroff(COLOR_PAIR(1) | COLOR_PAIR(2) | A_BOLD);
         x_pos += 18;
@@ -536,14 +515,18 @@ int main() {
     shared_memory->aktywne_samoloty = 0;
 
     if (wybor == 1) {
-        strcpy(shared_memory->scenariusz_nazwa, "SCENARIUSZ A: OPTYMALNY");
+        // Scenariusz 1: Ideał - Zrównoważony
+        strcpy(shared_memory->scenariusz_nazwa, "SCENARIUSZ A: OPTYMALNY (BALANS)");
         shared_memory->cfg_runways = 2;
         shared_memory->cfg_gates = 6;
-        shared_memory->cfg_spawn_rate = 20;
-        shared_memory->cfg_pax_rate = 15;
-        shared_memory->cfg_boarding_time = 2;
-        shared_memory->cfg_plane_capacity = 26;
-        shared_memory->cfg_landing_time = 2500000;
+
+        // ZMIANY:
+        shared_memory->cfg_spawn_rate = 35;
+        shared_memory->cfg_pax_rate = 20;       // 20% - Szansa na pasażera (optymalna przy rzadszych lotach)
+        shared_memory->cfg_boarding_time = 4;   // 5s - Czas na podziwianie postoju
+
+        shared_memory->cfg_plane_capacity = 30; // Zwiększamy pojemność, bo samoloty są rzadziej
+        shared_memory->cfg_landing_time = 2000000; // 2.0s - Szybsze lądowanie, żeby zwolnić pas
     }
     else if (wybor == 2) {
         strcpy(shared_memory->scenariusz_nazwa, "SCENARIUSZ B: TLUM");
