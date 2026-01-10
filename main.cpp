@@ -12,8 +12,10 @@
 #include <ctime>
 #include <cstdlib>
 #include <cmath>
+#include <algorithm> // potrzebne do std::min
+
 // =============================================================
-// =======  USTAWIENIA "REALISTYCZNY CHAOS" (MIX WYNIKÓW) ======
+// =======  USTAWIENIA "LUŹNE LOTNISKO" (Brak Kolejek) =========
 // =============================================================
 
 #define RUNWAYS_COUNT 2
@@ -26,30 +28,28 @@
 #define DELIVERY_TIME 12
 
 // --- PARAMETRY RUCHU ---
-#define PLANE_CAPACITY 22     // Lekko niestandardowa liczba (trudniej trafić idealnie)
-#define BOARDING_SPEED 4      // Średnie tempo (4 osoby/sek)
-#define BOARDING_TIME 6       // Krótki czas! Samolot nie będzie czekał w nieskończoność.
+#define PLANE_CAPACITY 26
+#define BOARDING_TIME 2       // <--- ZMIANA: Szybki postój (2 sekundy)
 
-// --- GENERATOR (NA STYK) ---
-#define SPAWN_RATE 35         // Samolot co 3.5s (Zwiększamy presję, samoloty częściej!)
-// To jest klucz do mieszanki wyników:
-#define PASSENGER_RATE 25     // 25% szans (zmniejszone z 35%) - Mniejszy tłok
-#define PASSENGER_GROUP_SIZE 6 // Ale jak przychodzą, to większymi grupami (1-6) - Duża zmienność!
+// --- GENERATOR ---
+#define SPAWN_RATE 20         // <--- ZMIANA: Samolot co ok. 2.0s (częstsze loty)
+#define PASSENGER_RATE 30     // <--- ZMIANA: Tylko 10% szans na pasażerów (wolniejszy przyrost)
+#define PASSENGER_GROUP_SIZE 2 // <--- ZMIANA: Małe grupki (max 2 osoby)
+
+// --- INTELIGENCJA ---
+#define CROWD_LIMIT 15        // <--- ZMIANA: Niższy próg reakcji na tłok
+#define CHANCE_TO_HELP 75
 
 #define LANDING_TIME 2500000  // 2.5s na pasie
-#define TANKING_TIME 3        // 3s tankowania
+#define TANKING_TIME 2        // <--- ZMIANA: Szybsze tankowanie (2s)
 
-
-
-// --- LOGOWANIE ---
 #define LOG_HISTORY_SIZE 20
 
 // =============================================================
 
-#define SHM_KEY 77781 // Nowy klucz
-#define SEM_KEY 88892
+#define SHM_KEY 77785 // Zmieniony klucz dla pewności czystej pamięci
+#define SEM_KEY 88896
 
-// --- INDEKSY SEMAFORÓW ---
 #define SEM_PAS 0
 #define SEM_GATE 1
 #define SEM_CYSTERNA 2
@@ -78,7 +78,6 @@ int shmid = -1;
 int semid = -1;
 SharedData* shared_memory = nullptr;
 
-// --- SEMAFORY ---
 void sem_p(int sem_num) {
     struct sembuf s = { (unsigned short)sem_num, -1, 0 };
     semop(semid, &s, 1);
@@ -89,7 +88,6 @@ void sem_v(int sem_num) {
     semop(semid, &s, 1);
 }
 
-// --- FUNKCJA LOGUJĄCA ---
 void dodaj_log(const char* format, int id, char kierunek, int pasazerowie, const char* status) {
     sem_p(MUTEX_ZASOBY);
     char bufor[60];
@@ -109,7 +107,6 @@ void cleanup(int signum) {
     exit(0);
 }
 
-// --- DOSTAWCA ---
 void proces_dostawcy_paliwa() {
     while(true) {
         shared_memory->nastepna_dostawa = time(NULL) + DELIVERY_TIME;
@@ -124,7 +121,27 @@ void proces_dostawcy_paliwa() {
 // --- SAMOLOT ---
 void proces_samolotu(int id) {
     srand(getpid() + id);
-    int moj_kierunek = rand() % 4;
+
+    // --- LOGIKA DECYZYJNA ---
+    sem_p(MUTEX_ZASOBY);
+    int max_pax = -1;
+    int max_kierunek = -1;
+
+    for(int i=0; i<4; i++) {
+        if (shared_memory->pasazerowie_w_terminalu[i] > max_pax) {
+            max_pax = shared_memory->pasazerowie_w_terminalu[i];
+            max_kierunek = i;
+        }
+    }
+    sem_v(MUTEX_ZASOBY);
+
+    int moj_kierunek;
+    if (max_pax > CROWD_LIMIT) {
+        if (rand() % 100 < CHANCE_TO_HELP) moj_kierunek = max_kierunek;
+        else moj_kierunek = rand() % 4;
+    } else {
+        moj_kierunek = rand() % 4;
+    }
 
     // 1. LĄDOWANIE
     sem_p(SEM_PAS);
@@ -139,7 +156,7 @@ void proces_samolotu(int id) {
             break;
         }
     }
-    if (moj_pas == -1) {
+    if (moj_pas == -1) { // Fallback
         for(int i=0; i<RUNWAYS_COUNT; i++) if(shared_memory->pasy_startowe[i]==0) { shared_memory->pasy_startowe[i]=id; moj_pas=i; break; }
     }
 
@@ -165,7 +182,7 @@ void proces_samolotu(int id) {
     }
     if (my_gate_index == -1) { sem_v(SEM_GATE); exit(1); }
 
-    // 3. TANKOWANIE
+    // 3. TANKOWANIE (Szybkie)
     sem_p(SEM_CYSTERNA);
     int my_tanker_index = -1;
     start_node = rand() % TANKERS_COUNT;
@@ -180,47 +197,47 @@ void proces_samolotu(int id) {
     }
 
     sem_p(MUTEX_ZASOBY);
-    while (shared_memory->paliwo_w_magazynie < FUEL_NEEDED) {
-        sem_v(MUTEX_ZASOBY);
-        sleep(1);
-        sem_p(MUTEX_ZASOBY);
+    if (shared_memory->paliwo_w_magazynie >= FUEL_NEEDED) {
+        shared_memory->paliwo_w_magazynie -= FUEL_NEEDED;
     }
-    shared_memory->paliwo_w_magazynie -= FUEL_NEEDED;
     sem_v(MUTEX_ZASOBY);
 
     sleep(TANKING_TIME);
     if (my_tanker_index != -1) shared_memory->cysterny_status[my_tanker_index] = 0;
     sem_v(SEM_CYSTERNA);
 
-    // 4. BOARDING
-    int czas_czekania = 0;
-    while (czas_czekania < BOARDING_TIME) {
-        sem_p(MUTEX_ZASOBY);
-        if (shared_memory->pasazerowie_w_terminalu[moj_kierunek] > 0 &&
-            shared_memory->gate_liczba_pasazerow[my_gate_index] < PLANE_CAPACITY) {
+    // ==========================================================
+    // 4. BOARDING - NOWA LOGIKA "STRZAŁU" (BATCH)
+    // ==========================================================
 
-            int do_wziecia = BOARDING_SPEED;
-            if (do_wziecia > shared_memory->pasazerowie_w_terminalu[moj_kierunek])
-                do_wziecia = shared_memory->pasazerowie_w_terminalu[moj_kierunek];
-            if (shared_memory->gate_liczba_pasazerow[my_gate_index] + do_wziecia > PLANE_CAPACITY)
-                do_wziecia = PLANE_CAPACITY - shared_memory->gate_liczba_pasazerow[my_gate_index];
+    // Samolot po prostu czeka przez zadany czas (symulacja obsługi)
+    sleep(BOARDING_TIME);
 
-            shared_memory->pasazerowie_w_terminalu[moj_kierunek] -= do_wziecia;
-            shared_memory->gate_liczba_pasazerow[my_gate_index] += do_wziecia;
-        }
-        bool pelny = (shared_memory->gate_liczba_pasazerow[my_gate_index] >= PLANE_CAPACITY);
-        sem_v(MUTEX_ZASOBY);
+    sem_p(MUTEX_ZASOBY);
 
-        if (pelny) break;
-        sleep(1);
-        czas_czekania++;
+    // Sprawdzamy stan faktyczny PO odczekaniu
+    int ludzie_w_terminalu = shared_memory->pasazerowie_w_terminalu[moj_kierunek];
+    int obecni_w_samolocie = shared_memory->gate_liczba_pasazerow[my_gate_index];
+    int wolne_miejsca = PLANE_CAPACITY - obecni_w_samolocie;
+
+    // Bierzemy tylu, ilu stoi w kolejce, ale nie wiecej niż miejsc
+    int do_zabrania = (ludzie_w_terminalu < wolne_miejsca) ? ludzie_w_terminalu : wolne_miejsca;
+
+    if (do_zabrania > 0) {
+        shared_memory->pasazerowie_w_terminalu[moj_kierunek] -= do_zabrania;
+        shared_memory->gate_liczba_pasazerow[my_gate_index] += do_zabrania;
     }
 
-    int pas = shared_memory->gate_liczba_pasazerow[my_gate_index];
-    const char* status = (pas >= PLANE_CAPACITY) ? "PELNY" : "TIMEOUT";
-    dodaj_log("ID:%02d [%c] Pax: %d/%d (%s)", id, KIERUNKI_NAZWY[moj_kierunek], pas, status);
+    // Pobieramy ostateczny stan do logów
+    int final_pax = shared_memory->gate_liczba_pasazerow[my_gate_index];
+    sem_v(MUTEX_ZASOBY);
 
-    // 5. ODLOT
+    // ==========================================================
+
+    const char* status = (final_pax >= PLANE_CAPACITY) ? "PELNY" : "ODLOT";
+    dodaj_log("ID:%02d [%c] Pax: %d/%d (%s)", id, KIERUNKI_NAZWY[moj_kierunek], final_pax, status);
+
+    // 5. ODLOT (Zwalniamy bramkę NATYCHMIAST)
     if (my_gate_index != -1) {
         shared_memory->stanowiska_gate[my_gate_index] = 0;
         shared_memory->gate_kierunek[my_gate_index] = -1;
@@ -228,6 +245,7 @@ void proces_samolotu(int id) {
     }
     sem_v(SEM_GATE);
 
+    // Procedura startowa
     sem_p(SEM_PAS);
     moj_pas = -1;
     start_node = rand() % RUNWAYS_COUNT;
@@ -255,9 +273,10 @@ void proces_samolotu(int id) {
 // --- RYSOWANIE GUI ---
 void draw_interface(int loop_counter, int plane_id_counter) {
     erase();
-    // RAMKI
     int height = LINES;
     int width = 80;
+
+    // RAMKI
     mvvline(0, width, ACS_VLINE, height);
     for(int i=0; i<width; i++) { mvaddch(0, i, ACS_HLINE); mvaddch(height-1, i, ACS_HLINE); }
     for(int i=0; i<height; i++) { mvaddch(i, 0, ACS_VLINE); }
@@ -269,7 +288,7 @@ void draw_interface(int loop_counter, int plane_id_counter) {
     if (seconds_left < 0) seconds_left = 0;
 
     attron(A_BOLD | COLOR_PAIR(3));
-    mvprintw(1, 2, " SYMULACJA LOTNISKA - WIZUALIZACJA");
+    mvprintw(1, 2, " SYMULACJA LOTNISKA - WERSJA LIGHT"); // Zmieniłem nazwę
     mvprintw(1, 55, " Dostawa za: %ds ", seconds_left);
     attroff(A_BOLD | COLOR_PAIR(3));
     mvhline(2, 1, ACS_HLINE, width-1);
@@ -305,7 +324,7 @@ void draw_interface(int loop_counter, int plane_id_counter) {
 
     // BRAMKI I CYSTERNY
     attron(A_BOLD);
-    mvprintw(8, 2, "BRAMKI (BOARDING):");
+    mvprintw(8, 2, "BRAMKI (SZYBKI POSTOJ):"); // Zmieniona etykieta
     mvprintw(8, 45, "CYSTERNY:");
     attroff(A_BOLD);
 
@@ -318,11 +337,14 @@ void draw_interface(int loop_counter, int plane_id_counter) {
         if (pid == 0) {
             attron(COLOR_PAIR(1)); printw("[ .................... ]"); attroff(COLOR_PAIR(1));
         } else {
-            if (pas >= PLANE_CAPACITY) attron(COLOR_PAIR(1)); else attron(COLOR_PAIR(3));
+            // Kolorujemy na zółto jeśli niepełny, na zielono (lub czerwono) tylko jak pełny
+            if (pas >= PLANE_CAPACITY) attron(COLOR_PAIR(1)); else attron(COLOR_PAIR(4));
+
             printw("[ ID:%-2d ", pid);
             attron(A_BOLD); printw("%c", KIERUNKI_NAZWY[kier]); attroff(A_BOLD);
             printw(" %2d/%-2d ]", pas, PLANE_CAPACITY);
-            if (pas >= PLANE_CAPACITY) attroff(COLOR_PAIR(1)); else attroff(COLOR_PAIR(3));
+
+            if (pas >= PLANE_CAPACITY) attroff(COLOR_PAIR(1)); else attroff(COLOR_PAIR(4));
         }
     }
 
@@ -336,24 +358,34 @@ void draw_interface(int loop_counter, int plane_id_counter) {
         }
     }
 
-    // --- TERMINAL POD BRAMKAMI ---
+    // --- TERMINAL ---
     int terminal_y = 9 + GATES_COUNT + 1;
     mvhline(terminal_y - 1, 1, ACS_HLINE, width-1);
-    mvprintw(terminal_y, 2, "TERMINAL (OCZEKUJACY NA LOT):");
+    mvprintw(terminal_y, 2, "TERMINAL (OCZEKUJACY):");
 
     int x_pos = 2;
     for(int i=0; i<4; i++) {
         mvprintw(terminal_y + 1, x_pos, "BRAMA %c: ", KIERUNKI_NAZWY[i]);
-        attron(COLOR_PAIR(4) | A_BOLD);
+
+        if (shared_memory->pasazerowie_w_terminalu[i] > CROWD_LIMIT) {
+            attron(COLOR_PAIR(2) | A_BOLD); // Usunąłem miganie, żeby nie denerwowało
+        } else {
+            attron(COLOR_PAIR(1) | A_BOLD); // Zielony kolor = spokój
+        }
+
         printw("%-3d os.", shared_memory->pasazerowie_w_terminalu[i]);
-        attroff(COLOR_PAIR(4) | A_BOLD);
+
+        if (shared_memory->pasazerowie_w_terminalu[i] > CROWD_LIMIT) {
+            attroff(COLOR_PAIR(2) | A_BOLD);
+        } else {
+            attroff(COLOR_PAIR(1) | A_BOLD);
+        }
         x_pos += 18;
     }
 
-    // --- GRAFIKI ASCII (WIEŻA + SAMOLOT Z BOKU) ---
+    // --- GRAFIKI ---
     int art_y = terminal_y + 3;
-
-    // Budynek Lotniska (Wieża)
+    // (Reszta rysowania bez zmian)
     attron(A_BOLD | COLOR_PAIR(3));
     mvprintw(art_y,     5, "      _H_      [ WIEZA KONTROLI ]");
     mvprintw(art_y + 1, 5, "     /__ \\     ");
@@ -361,34 +393,41 @@ void draw_interface(int loop_counter, int plane_id_counter) {
     mvprintw(art_y + 3, 5, "   | |___| |   Status: ONLINE");
     attroff(A_BOLD | COLOR_PAIR(3));
 
-    // Samolot (Boeing 737 - Widok z boku, pod wieżą)
-    int plane_y = art_y + 5; // Samolot niżej
+    int plane_y = art_y + 5;
     attron(COLOR_PAIR(4));
-    // Prosty, czytelny samolot pasażerski z boku
     mvprintw(plane_y,     5, "         __|__");
     mvprintw(plane_y + 1, 5, "__________(_)__________");
     mvprintw(plane_y + 2, 5, "   O   O       O   O");
     attroff(COLOR_PAIR(4));
 
-    // --- LEGENDA PARAMETRÓW (NA DOLE) ---
-    int legend_y = height - 5;
+    // --- LEGENDA DYNAMICZNA ---
+    int legend_y = height - 6; // Trochę wyżej, żeby zmieścić więcej
     mvhline(legend_y, 1, ACS_HLINE, width-1);
-    attron(A_REVERSE);
-    mvprintw(legend_y + 1, 2, " LEGENDA KONFIGURACJI: ");
-    attroff(A_REVERSE);
 
-    mvprintw(legend_y + 2, 2, "Spawn Samolotu: co %.1fs | Spawn Pasazerow: %d%% szans", (float)SPAWN_RATE/10.0, PASSENGER_RATE);
-    mvprintw(legend_y + 3, 2, "Ladowanie: %.1fs | Tankowanie: %ds | Boarding: %ds", (float)LANDING_TIME/1000000.0, TANKING_TIME, BOARDING_TIME);
+    attron(A_REVERSE | A_BOLD);
+    mvprintw(legend_y + 1, 2, " AKTUALNY SCENARIUSZ: ");
+    attroff(A_REVERSE | A_BOLD);
+
+    // Wyświetlamy parametry zdefiniowane w #define
+    mvprintw(legend_y + 2, 2, "Zasoby: Pasy:%d | Bramki:%d | Cysterny:%d",
+             RUNWAYS_COUNT, GATES_COUNT, TANKERS_COUNT);
+
+    mvprintw(legend_y + 3, 2, "Samoloty: Spawn co %ds | Pojemnosc: %d | Boarding: %ds",
+             SPAWN_RATE/10, PLANE_CAPACITY, BOARDING_TIME);
+    // SPAWN_RATE dzielimy przez 10 jeśli to pętla, lub zostaw tak jak masz
+
+    mvprintw(legend_y + 4, 2, "Pasazerowie: Szansa %d%% | Grupa max: %d | Tlok od: %d",
+             PASSENGER_RATE, PASSENGER_GROUP_SIZE, CROWD_LIMIT);
 
     // --- STATYSTYKI ---
     attron(A_BOLD);
     mvprintw(height - 1, 2, "Ilosc samolotow: %d", plane_id_counter - 1);
     attroff(A_BOLD);
 
-    // --- LOGI (PRAWA STRONA - ODLOTY) ---
+    // --- ODLOTY ---
     int log_x_start = width + 2;
     attron(A_BOLD | COLOR_PAIR(3));
-    mvprintw(1, log_x_start, "ODLOTY / DEPARTURES:"); // ZMIANA NAZWY
+    mvprintw(1, log_x_start, "ODLOTY / DEPARTURES:");
     attroff(A_BOLD | COLOR_PAIR(3));
 
     for(int i=0; i<LOG_HISTORY_SIZE; i++) {
@@ -412,7 +451,7 @@ void draw_interface(int loop_counter, int plane_id_counter) {
 int main() {
     srand(time(NULL));
 
-    // Reset pamięci (Standardowa procedura)
+    // Czyścimy stare zasoby
     int old_shmid = shmget(SHM_KEY, sizeof(SharedData), 0666);
     if (old_shmid != -1) shmctl(old_shmid, IPC_RMID, nullptr);
     int old_semid = semget(SEM_KEY, 4, 0666);
@@ -444,7 +483,6 @@ int main() {
     init_pair(3, COLOR_CYAN, COLOR_BLACK);
     init_pair(4, COLOR_YELLOW, COLOR_BLACK);
 
-    // Obsługa PAUZY (Spacja)
     nodelay(stdscr, TRUE);
 
     int loop_counter = 0;
@@ -478,19 +516,21 @@ int main() {
                 }
             }
 
-            // Balans pasażerów
+            // --- GENEROWANIE PASAŻERÓW (Zwolnione) ---
             if (rand() % 100 < PASSENGER_RATE) {
                 sem_p(MUTEX_ZASOBY);
                 int kier = rand() % 4;
+                // Dodajemy tylko 1-2 osoby (zmienna PASSENGER_GROUP_SIZE)
                 shared_memory->pasazerowie_w_terminalu[kier] += (1 + rand() % PASSENGER_GROUP_SIZE);
                 sem_v(MUTEX_ZASOBY);
             }
+            // -----------------------------------------
 
             loop_counter++;
         }
 
         while (waitpid(-1, NULL, WNOHANG) > 0);
-        usleep(100000);
+        usleep(100000); // 100ms
     }
     return 0;
 }
