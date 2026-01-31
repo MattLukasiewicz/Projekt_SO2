@@ -372,7 +372,6 @@ void draw_interface(int loop_counter, int plane_id_counter, bool paused) {
     // === RYSUNEK WIEŻY I SAMOLOTU (POD TERMINALEM) ===========
     // =========================================================
 
-    // art_y ustawiamy pod terminalem (term_y to linia nagłówka terminala)
     int art_y = term_y + 5;
     int art_x = 5;
 
@@ -394,10 +393,9 @@ void draw_interface(int loop_counter, int plane_id_counter, bool paused) {
     attroff(A_BOLD);
 
     // --- SAMOLOT (TWÓJ PROJEKT) ---
-    int plane_y = art_y + 6; // +6 żeby nie najechał na podstawę wieży
+    int plane_y = art_y + 6;
 
     attron(COLOR_PAIR(4) | A_BOLD); // Żółty/Biały
-    // Używamy art_x (które wynosi 5), żeby pasowało do reszty
     mvprintw(plane_y,     art_x, "          __|__");
     mvprintw(plane_y + 1, art_x, "__________(_)__________");
     mvprintw(plane_y + 2, art_x, "   O   O       O   O");
@@ -422,7 +420,6 @@ void draw_interface(int loop_counter, int plane_id_counter, bool paused) {
     }
 
     // --- LEGENDA PARAMETRÓW I STATUSU ---
-    // Rysujemy od dołu ekranu
     int info_y = height - 7;
 
     mvhline(info_y, 1, ACS_HLINE, width-1);
@@ -520,7 +517,7 @@ int main() {
         shared_memory->cfg_pax_rate = 20;       // 20% - Szansa na pasażera (optymalna przy rzadszych lotach)
         shared_memory->cfg_boarding_time = 4;   // 5s - Czas na podziwianie postoju
 
-        shared_memory->cfg_plane_capacity = 30; // Zwiększamy pojemność, bo samoloty są rzadziej
+        shared_memory->cfg_plane_capacity = 30;
         shared_memory->cfg_landing_time = 2000000; // 2.0s - Szybsze lądowanie, żeby zwolnić pas
     }
     else if (wybor == 2) {
